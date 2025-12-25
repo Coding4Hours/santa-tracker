@@ -1,7 +1,26 @@
 ---
-
+import { SEO } from "astro-seo";
 ---
-
+    <SEO
+      title="Santa Tracker"
+      description="A santa tracker."
+      openGraph={{
+        basic: {
+          title: "Santa Tracker",
+          type: "website",
+					image: "/image.png",
+        },
+      }}
+      twitter={{
+        title: "Santa Tracker",
+				image: "/image.png",
+        description: "A santa tracker.",
+        card: "summary_large_image",
+      }}
+      extend={{
+        link: [{ rel: "icon", href: "/favicon.ico" }],
+      }}
+    />
 <link
 	rel="stylesheet"
 	href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
