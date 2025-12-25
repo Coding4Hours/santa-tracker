@@ -1,0 +1,198 @@
+---
+
+---
+
+<link
+	rel="stylesheet"
+	href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+/>
+<style>
+	body {
+		margin: 0;
+		font-family: sans-serif;
+	}
+	#map {
+		height: 100vh;
+		width: 100vw;
+	}
+	#info {
+		position: absolute;
+		top: 10px;
+		right: 10px;
+		z-index: 1000;
+		background: rgba(255, 255, 255, 0.9);
+		padding: 15px;
+		border-radius: 8px;
+		box-shadow: 0 0 15px rgba(0, 0, 0, 0.2);
+		max-width: 300px;
+	}
+	#status {
+		display: inline-block;
+		padding: 2px 8px;
+		border-radius: 4px;
+		background: #d42426;
+		color: white;
+		font-weight: bold;
+		font-size: 0.8em;
+	}
+</style>
+
+<div id="info">
+	<div id="status">Loading...</div>
+	<h2 id="loc" style="margin: 10px 0 5px 0;">Waiting for GPS...</h2>
+	<p id="details" style="margin: 0; color: #666;">Synchronizing...</p>
+</div>
+<div id="map"></div>
+
+<script>
+	interface Location {
+		lat: number;
+		lng: number;
+	}
+
+	interface Destination {
+		id: string;
+		city: string;
+		region: string;
+		location: Location;
+		arrival: number; // Raw timestamp from JSON
+		departure: number; // Raw timestamp from JSON
+		details: {
+			photos: any[];
+		};
+	}
+
+	interface Dateination extends Omit<Destination, "arrival" | "departure"> {
+		arrival: Date;
+		departure: Date;
+	}
+
+	interface Status {
+		lat: number;
+		lng: number;
+		status: "preparing" | "finished route" | "at stop" | "en route";
+		stopName?: string;
+		departureIn?: string;
+		arrivalIn?: string;
+		from?: string;
+		to?: string;
+		photos?: any[];
+	}
+
+	import "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
+
+	const from_id = (id: string) => document.getElementById(id);
+	const UI = {
+		status: from_id("status"),
+		name: from_id("loc"),
+		desc: from_id("details"),
+	};
+	let map: any,
+		santaMarker: any,
+		route: Dateination[] = [];
+
+	const takeoff = new Date(
+		Date.UTC(new Date().getUTCFullYear(), 11, 24, 10, 0, 0),
+	);
+
+	const wrap = (n: number) => (Math.abs(n) > 180 ? n - Math.sign(n) * 360 : n);
+	const format = (ms: number) => {
+		const s = Math.floor(ms / 1000);
+		return `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, "0")}`;
+	};
+
+	window.currentLoc = (): Status => {
+		const now = new Date();
+		const nextIdx = route.findIndex((dest) => dest.arrival > now);
+
+		if (nextIdx === 0)
+			return {
+				...route[0].location,
+				status: "preparing",
+				stopName: "North Pole",
+			};
+		if (nextIdx === -1)
+			return {
+				...route[route.length - 1].location,
+				status: "finished route",
+				stopName: "North Pole",
+			};
+
+		const last = route[nextIdx - 1];
+		const next = route[nextIdx];
+
+		if (now <= last.departure) {
+			return {
+				...last.location,
+				status: "at stop",
+				stopName: `${last.city}, ${last.region}`,
+				departureIn: format(last.departure.getTime() - now.getTime()),
+				photos: last.details.photos,
+			};
+		}
+
+		const progress =
+			(now.getTime() - last.departure.getTime()) /
+			(next.arrival.getTime() - last.departure.getTime());
+
+		const dLng = wrap(next.location.lng - last.location.lng);
+
+		return {
+			lat:
+				last.location.lat + (next.location.lat - last.location.lat) * progress,
+			lng: wrap(last.location.lng + dLng * progress),
+			status: "en route",
+			from: last.city,
+			to: `${next.city}, ${next.region}`,
+			arrivalIn: format(next.arrival.getTime() - now.getTime()),
+			photos: next.details.photos,
+		};
+	};
+
+	function update() {
+		const data = window.currentLoc();
+		const pos: [number, number] = [data.lat, data.lng];
+
+		santaMarker.setLatLng(pos);
+		UI.status.innerText = data.status;
+
+		if (data.status === "en route") {
+			UI.name.innerText = `Heading to ${data.to}`;
+			UI.desc.innerText = `From: ${data.from} (Arriving in ${data.arrivalIn})`;
+		} else if (data.status === "at stop") {
+			UI.desc.innerText = `Delivering gifts (Departing in ${data.departureIn})`;
+			map.panTo(pos);
+		} else {
+			UI.desc.innerText = "Santa is at the North Pole.";
+		}
+
+		if (data.status === "en route" || data.status === "at stop") map.panTo(pos);
+	}
+
+	// INIT
+	const res = await fetch(
+		"https://firebasestorage.googleapis.com/v0/b/santa-tracker-firebase.appspot.com/o/route%2Fsanta_en.json?alt=media&2018b",
+	).then((r) => r.json());
+
+	route = res.destinations.map((d: Destination) => {
+		const arrival = new Date(
+			takeoff.getTime() + (d.arrival - res.destinations[0].departure),
+		);
+		return {
+			...d,
+			arrival,
+			departure: new Date(arrival.getTime() + (d.departure - d.arrival)),
+		};
+	});
+
+	map = L.map("map").setView([0, 0], 5);
+	L.tileLayer(
+		"https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
+	).addTo(map);
+	santaMarker = L.marker([0, 0], {
+		icon: L.icon({ iconUrl: "/santa.png", iconSize: [40, 40] }),
+	}).addTo(map);
+
+	setInterval(update, 1000);
+	update();
+</script>

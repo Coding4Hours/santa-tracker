@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Santa Tracker 2025 - Leaflet Edition</title>
+
+    <!-- 1. Leaflet CSS -->
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
+
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        font-family: sans-serif;
+      }
+      #map {
+        height: 100vh;
+        width: 100vw;
+      }
+
+      #info-panel {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        z-index: 1000;
+        background: rgba(255, 255, 255, 0.9);
+        padding: 15px;
+        border-radius: 8px;
+        box-shadow: 0 0 15px rgba(0, 0, 0, 0.2);
+        max-width: 300px;
+      }
+      .status-tag {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 4px;
+        background: #d42426;
+        color: white;
+        font-weight: bold;
+        text-transform: uppercase;
+        font-size: 0.8em;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="info-panel">
+      <div id="status-tag" class="status-tag">Loading...</div>
+      <h2 id="location-name" style="margin: 10px 0 5px 0">
+        Waiting for GPS...
+      </h2>
+      <p id="details" style="margin: 0; color: #666">
+        Synchronizing with the North Pole...
+      </p>
+    </div>
+
+    <div id="map"></div>
+
+    <!-- 2. Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <!-- Your Provided Logic -->
+    <script>
+      window.route = null;
+      // Current Time Setup (Setting to Dec 24, 2025)
+      const takeoff = new Date(Date.UTC(2025, 11, 24, 10, 0, 0));
+
+      async function fetchRoute() {
+        try {
+          const url =
+            "https://firebasestorage.googleapis.com/v0/b/santa-tracker-firebase.appspot.com/o/route%2Fsanta_en.json?alt=media&2018b";
+          const response = await fetch(url);
+          const data = await response.json();
+          const res = data.destinations;
+          const startTimestamp = res[0].departure;
+
+          window.route = res.map((dest) => {
+            const offset = dest.arrival - startTimestamp;
+            const stopDuration = dest.departure - dest.arrival;
+            return {
+              ...dest,
+              arrival: new Date(takeoff.getTime() + offset),
+              departure: new Date(takeoff.getTime() + offset + stopDuration),
+            };
+          });
+          console.log("Santa's Route Initialized");
+          initMap(); // Initialize map once data is ready
+        } catch (error) {
+          console.error("Failed to fetch Santa's route:", error);
+        }
+      }
+
+      window.currentLocation = () => {
+        if (!window.route) return null;
+        const now = new Date();
+
+        // Check if at a stop
+        const atStop = window.route.find(
+          (dest) => now >= dest.arrival && now <= dest.departure,
+        );
+        if (atStop) {
+          return {
+            lat: atStop.location.lat,
+            lng: atStop.location.lng,
+            status: "at stop",
+            stopName: atStop.city,
+            presents: atStop.presentsDelivered,
+          };
+        }
+
+        // Find flying segment
+        const pastStops = window.route.filter((dest) => dest.departure <= now);
+        const futureStops = window.route.filter((dest) => dest.arrival > now);
+        const lastStop = pastStops[pastStops.length - 1];
+        const nextStop = futureStops[0];
+
+        if (!lastStop)
+          return {
+            lat: window.route[0].location.lat,
+            lng: window.route[0].location.lng,
+            status: "preparing",
+            stopName: "North Pole",
+          };
+        if (!nextStop)
+          return {
+            lat: lastStop.location.lat,
+            lng: lastStop.location.lng,
+            status: "finished",
+            stopName: "North Pole",
+          };
+
+        const elapsed = now - lastStop.departure;
+        const totalFlightTime = nextStop.arrival - lastStop.departure;
+        const progress = Math.min(Math.max(elapsed / totalFlightTime, 0), 1);
+
+        let lat =
+          lastStop.location.lat +
+          (nextStop.location.lat - lastStop.location.lat) * progress;
+        let lngDiff = nextStop.location.lng - lastStop.location.lng;
+        if (lngDiff > 180) lngDiff -= 360;
+        if (lngDiff < -180) lngDiff += 360;
+        let lng = lastStop.location.lng + lngDiff * progress;
+        if (lng > 180) lng -= 360;
+        if (lng < -180) lng += 360;
+
+        return {
+          lat,
+          lng,
+          status: "en route",
+          from: lastStop.city,
+          to: nextStop.city,
+          progress: (progress * 100).toFixed(2) + "%",
+        };
+      };
+
+      // --- Leaflet Integration ---
+      let map, santaMarker;
+
+      // Custom Santa Icon
+      const santaIcon = L.icon({
+        iconUrl: "https://cdn-icons-png.flaticon.com/512/744/744524.png", // Sleigh icon
+        iconSize: [40, 40],
+        iconAnchor: [20, 20],
+      });
+
+      function initMap() {
+        // Create map
+        map = L.map("map").setView([0, 0], 3);
+
+        // Add Dark Mode/Festive Tiles
+        L.tileLayer(
+          "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+          {
+            attribution: "&copy; OpenStreetMap &copy; CARTO",
+          },
+        ).addTo(map);
+
+        // Add Santa Marker
+        santaMarker = L.marker([0, 0], { icon: santaIcon }).addTo(map);
+
+        // Start update loop
+        updateSanta();
+        setInterval(updateSanta, 1000); // Update every second
+      }
+
+      function updateSanta() {
+        const data = window.currentLocation();
+        if (!data) return;
+
+        const pos = [data.lat, data.lng];
+        santaMarker.setLatLng(pos);
+
+        // Update UI
+        document.getElementById("status-tag").innerText = data.status;
+
+        if (data.status === "at stop") {
+          document.getElementById("location-name").innerText = data.stopName;
+          document.getElementById("details").innerText =
+            `Delivering gifts! (${data.presents.toLocaleString()} delivered)`;
+          map.panTo(pos);
+        } else if (data.status === "en route") {
+          document.getElementById("location-name").innerText =
+            `Heading to ${data.to}`;
+          document.getElementById("details").innerText =
+            `From: ${data.from} (${data.progress})`;
+          map.panTo(pos);
+        } else {
+          document.getElementById("location-name").innerText = data.stopName;
+          document.getElementById("details").innerText =
+            "Santa is at the North Pole.";
+        }
+      }
+
+      // Initialize
+      fetchRoute();
+    </script>
+  </body>
+</html>
